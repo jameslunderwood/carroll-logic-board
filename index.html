@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Game of Logic</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=UnifrakturMaguntia&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #1a0e05; }
+    @keyframes popIn {
+      0% { transform: scale(0) rotate(-20deg); opacity: 0; }
+      100% { transform: scale(1) rotate(0deg); opacity: 1; }
+    }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .translate-btn:hover { background: #8b4513 !important; transform: translateY(-1px); }
+    .translate-btn:active { transform: translateY(0); }
+    .example-chip:hover { background: rgba(180,120,60,0.3) !important; color: #f0d9b5 !important; }
+    .reset-btn:hover { color: #f0d9b5 !important; }
+    input:focus { outline: none; border-color: #b8864e !important; box-shadow: 0 0 0 2px rgba(184,134,78,0.25) !important; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback } = React;
+
+    const EMPTY = null;
+    const SHADED = "shaded";
+    const COUNTER = "counter";
+    const GREY = "grey";
+    const BOTH = "both";
+
+    const initialBoard = () => ({
+      AB: EMPTY, A_notB: EMPTY, notA_B: EMPTY, notA_notB: EMPTY,
+    });
+
+    const CELL_LABELS = {
+      AB: { row: "A", col: "B" },
+      A_notB: { row: "A", col: "not-B" },
+      notA_B: { row: "not-A", col: "B" },
+      notA_notB: { row: "not-A", col: "not-B" },
+    };
+
+    function BoardCell({ cellKey, state, animate }) {
+      const label = CELL_LABELS[cellKey];
+      const isShaded = state === SHADED || state === BOTH;
+      const hasRedCounter = state === COUNTER || state === BOTH;
+      const hasGreyCounter = state === GREY;
+      const counterColor = hasGreyCounter
+        ? { bg: "#8a8a8a", border: "#4a4a4a", text: "#e8e8e8" }
+        : { bg: "#c0392b", border: "#7b1a0e", text: "#fdf6e3" };
+      const hasCounter = hasRedCounter || hasGreyCounter;
+
+      return (
+        <div style={{
+          position: "relative", width: "120px", height: "120px",
+          border: "2px solid #2c1a0e", display: "flex",
+          alignItems: "center", justifyContent: "center",
+          backgroundColor: isShaded ? "#c8a882" : "#fdf6e3",
+          transition: "background-color 0.5s ease", overflow: "hidden",
+        }}>
+          {isShaded && (
+            <div style={{
+              position: "absolute", inset: 0,
+              backgroundImage: "repeating-linear-gradient(45deg, rgba(100,60,20,0.12) 0px, rgba(100,60,20,0.12) 2px, transparent 2px, transparent 10px)",
+            }} />
+          )}
+          <span style={{
+            position: "absolute", top: 5, left: 7,
+            fontSize: "13px", color: "#8b6040", fontFamily: "'Crimson Text', serif",
+            fontStyle: "italic", opacity: 0.85,
+          }}>
+            {label.row} ∧ {label.col}
+          </span>
+          {hasCounter && (
+            <div style={{
+              width: "52px", height: "52px", borderRadius: "50%",
+              backgroundColor: counterColor.bg, border: `3px solid ${counterColor.border}`,
+              boxShadow: "2px 3px 8px rgba(0,0,0,0.35)", zIndex: 2,
+              animation: animate ? "popIn 0.4s cubic-bezier(0.34,1.56,0.64,1)" : "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: counterColor.text, fontWeight: "bold", fontSize: "20px",
+              fontFamily: "'Crimson Text', serif",
+            }}>✕</div>
+          )}
+        </div>
+      );
+    }
+
+    async function translateWithClaude(sentence, apiKey) {
+      const systemPrompt = `You are a logic translator for Lewis Carroll's "The Game of Logic."
+Your job is to convert English sentences into Carroll board operations.
+
+The board has 4 cells based on two attributes A and B:
+- AB (A and B are true)
+- A_notB (A is true, B is false)
+- notA_B (A is false, B is true)
+- notA_notB (both false)
+
+Given a sentence, identify what A and B represent, then return ONLY a JSON object with:
+{
+  "termA": "...",
+  "termB": "...",
+  "AB": "shade" | "counter" | "grey_counter" | "empty",
+  "A_notB": "shade" | "counter" | "grey_counter" | "empty",
+  "notA_B": "shade" | "counter" | "grey_counter" | "empty",
+  "notA_notB": "shade" | "counter" | "grey_counter" | "empty",
+  "explanation": "one sentence plain English explanation"
+}
+
+Rules:
+- "All A are B" → grey_counter in A_notB
+- "No A are B" → grey_counter in AB
+- "Some A are B" → counter (red) in AB
+- "Some A are not B" → counter (red) in A_notB
+- Use grey_counter when a sentence definitively asserts a region is empty.
+- Use red counter when a sentence asserts at least one member definitely exists.
+- Use shade only for genuine uncertainty.
+
+Return ONLY the JSON, no markdown, no extra text.`;
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages: [{ role: "user", content: sentence }],
+        }),
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error.message);
+      const text = data.content.map(i => i.text || "").join("");
+      const clean = text.replace(/```json|```/g, "").trim();
+      return JSON.parse(clean);
+    }
+
+    function formatExplanation(text) {
+      return text
+        .replace(/\bnotA_notB\b/g, "'Not-A · Not-B'")
+        .replace(/\bnotA_B\b/g, "'Not-A · B'")
+        .replace(/\bA_notB\b/g, "'A · Not-B'")
+        .replace(/\bAB\b/g, "'A · B'");
+    }
+
+    const EXAMPLES = [
+      "All cats are mammals.",
+      "No politicians are honest.",
+      "Some philosophers are wealthy.",
+      "Some birds cannot fly.",
+      "All roses are beautiful.",
+    ];
+
+    function App() {
+      const [apiKey, setApiKey] = useState("");
+      const [apiKeySaved, setApiKeySaved] = useState(false);
+      const [input, setInput] = useState("");
+      const [board, setBoard] = useState(initialBoard());
+      const [termA, setTermA] = useState("A");
+      const [termB, setTermB] = useState("B");
+      const [explanation, setExplanation] = useState("");
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+      const [history, setHistory] = useState([]);
+      const [animateKey, setAnimateKey] = useState(0);
+
+      const handleTranslate = useCallback(async (sentence) => {
+        const text = sentence || input;
+        if (!text.trim()) return;
+        if (!apiKey.trim()) { setError("Please enter your Anthropic API key above."); return; }
+        setLoading(true);
+        setError("");
+        try {
+          const result = await translateWithClaude(text.trim(), apiKey.trim());
+          const mapCell = v => v === "shade" ? SHADED : v === "counter" ? COUNTER : v === "grey_counter" ? GREY : EMPTY;
+          setBoard({
+            AB: mapCell(result.AB), A_notB: mapCell(result.A_notB),
+            notA_B: mapCell(result.notA_B), notA_notB: mapCell(result.notA_notB),
+          });
+          setTermA(result.termA || "A");
+          setTermB(result.termB || "B");
+          setExplanation(result.explanation || "");
+          setAnimateKey(k => k + 1);
+          setHistory(h => [{ text: text.trim(), termA: result.termA, termB: result.termB }, ...h.slice(0, 4)]);
+        } catch (e) {
+          setError("Error: " + (e.message || "Could not parse the sentence."));
+        } finally {
+          setLoading(false);
+        }
+      }, [input, apiKey]);
+
+      const handleReset = () => {
+        setBoard(initialBoard()); setTermA("A"); setTermB("B");
+        setExplanation(""); setInput(""); setError("");
+      };
+
+      return (
+        <div style={{
+          minHeight: "100vh", background: "#1a0e05",
+          backgroundImage: "radial-gradient(ellipse at 20% 20%, #2d1a08 0%, #1a0e05 60%)",
+          fontFamily: "'Crimson Text', Georgia, serif",
+          display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 20px",
+        }}>
+          {/* Title */}
+          <div style={{ textAlign: "center", marginBottom: "36px", animation: "fadeSlide 0.6s ease" }}>
+            <h1 style={{
+              fontFamily: "'UnifrakturMaguntia', cursive",
+              fontSize: "clamp(28px, 5vw, 52px)", color: "#f0d9b5",
+              margin: 0, letterSpacing: "2px", textShadow: "0 2px 12px rgba(200,140,60,0.4)",
+            }}>The Game of Logic</h1>
+            <p style={{ color: "#a07840", fontSize: "15px", margin: "6px 0 0", fontStyle: "italic", letterSpacing: "1px" }}>
+              Carroll's Board · AI-Powered Translation
+            </p>
+            <div style={{ width: "80px", height: "1px", background: "linear-gradient(90deg, transparent, #b8864e, transparent)", margin: "10px auto 0" }} />
+          </div>
+
+          {/* API Key */}
+          {!apiKeySaved ? (
+            <div style={{
+              width: "100%", maxWidth: "620px",
+              background: "rgba(253,246,227,0.05)", border: "1px solid rgba(184,134,78,0.3)",
+              borderRadius: "4px", padding: "20px", marginBottom: "20px",
+            }}>
+              <label style={{ color: "#c8a060", fontSize: "13px", letterSpacing: "2px", textTransform: "uppercase", display: "block", marginBottom: "10px" }}>
+                Anthropic API Key
+              </label>
+              <p style={{ color: "#7a5830", fontSize: "13px", marginBottom: "12px", fontStyle: "italic" }}>
+                This app calls the Claude API directly from your browser. Your key is never stored or sent anywhere except Anthropic.
+                Get one at <a href="https://console.anthropic.com" target="_blank" style={{ color: "#b8864e" }}>console.anthropic.com</a>.
+              </p>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={e => setApiKey(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && apiKey.trim() && setApiKeySaved(true)}
+                  placeholder="sk-ant-..."
+                  style={{
+                    flex: 1, padding: "10px 14px",
+                    background: "rgba(253,246,227,0.08)", border: "1px solid rgba(184,134,78,0.4)",
+                    borderRadius: "3px", color: "#f0d9b5", fontSize: "15px",
+                    fontFamily: "'Crimson Text', serif",
+                  }}
+                />
+                <button
+                  onClick={() => apiKey.trim() && setApiKeySaved(true)}
+                  style={{
+                    padding: "10px 18px", background: "#6b3510", color: "#f0d9b5",
+                    border: "1px solid #b8864e", borderRadius: "3px", cursor: "pointer",
+                    fontSize: "14px", fontFamily: "'Crimson Text', serif",
+                  }}>
+                  Save
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: "16px" }}>
+              <button onClick={() => setApiKeySaved(false)} style={{
+                background: "transparent", border: "none", color: "#5a3815",
+                fontSize: "13px", cursor: "pointer", fontFamily: "'Crimson Text', serif",
+              }}>🔑 API key set · click to change</button>
+            </div>
+          )}
+
+          {/* Input */}
+          <div style={{
+            width: "100%", maxWidth: "620px",
+            background: "rgba(253,246,227,0.05)", border: "1px solid rgba(184,134,78,0.3)",
+            borderRadius: "4px", padding: "24px", marginBottom: "28px",
+          }}>
+            <label style={{ color: "#c8a060", fontSize: "13px", letterSpacing: "2px", textTransform: "uppercase", display: "block", marginBottom: "10px" }}>
+              Enter a proposition
+            </label>
+            <div style={{ display: "flex", gap: "10px" }}>
+              <input
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleTranslate()}
+                placeholder="e.g. No philosophers are wealthy."
+                style={{
+                  flex: 1, padding: "12px 16px",
+                  background: "rgba(253,246,227,0.08)", border: "1px solid rgba(184,134,78,0.4)",
+                  borderRadius: "3px", color: "#f0d9b5", fontSize: "16px",
+                  fontFamily: "'Crimson Text', serif",
+                }}
+              />
+              <button className="translate-btn" onClick={() => handleTranslate()} disabled={loading}
+                style={{
+                  padding: "12px 22px", background: loading ? "#5a3015" : "#6b3510",
+                  color: "#f0d9b5", border: "1px solid #b8864e", borderRadius: "3px",
+                  cursor: loading ? "not-allowed" : "pointer", fontSize: "15px",
+                  fontFamily: "'Crimson Text', serif", whiteSpace: "nowrap",
+                }}>
+                {loading ? "Thinking…" : "Place on Board →"}
+              </button>
+            </div>
+            <div style={{ marginTop: "14px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <span style={{ color: "#7a5830", fontSize: "12px", paddingTop: "3px" }}>Try:</span>
+              {EXAMPLES.map(ex => (
+                <button key={ex} className="example-chip"
+                  onClick={() => { setInput(ex); handleTranslate(ex); }}
+                  style={{
+                    background: "rgba(180,120,60,0.15)", border: "1px solid rgba(184,134,78,0.3)",
+                    color: "#a07840", borderRadius: "20px", padding: "3px 12px",
+                    fontSize: "13px", fontFamily: "'Crimson Text', serif", cursor: "pointer",
+                  }}>{ex}</button>
+              ))}
+            </div>
+            {error && <p style={{ color: "#c0392b", marginTop: "10px", fontSize: "14px", fontStyle: "italic" }}>{error}</p>}
+          </div>
+
+          {/* Board */}
+          <div>
+            <div style={{ display: "flex", marginLeft: "100px" }}>
+              {[termB, `not-${termB}`].map(label => (
+                <div key={label} style={{ width: "120px", textAlign: "center", padding: "8px 4px", color: "#c8a060", fontStyle: "italic", fontSize: "15px" }}>{label}</div>
+              ))}
+            </div>
+            <div style={{ display: "flex" }}>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {[termA, `not-${termA}`].map(label => (
+                  <div key={label} style={{
+                    width: "100px", height: "120px", display: "flex", alignItems: "center",
+                    justifyContent: "flex-end", paddingRight: "12px", color: "#c8a060", fontStyle: "italic", fontSize: "15px",
+                  }}>{label}</div>
+                ))}
+              </div>
+              <div style={{
+                display: "grid", gridTemplateColumns: "120px 120px",
+                border: "2px solid #2c1a0e", boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
+              }}>
+                {["AB", "A_notB", "notA_B", "notA_notB"].map(key => (
+                  <BoardCell key={`${key}-${animateKey}`} cellKey={key} state={board[key]} animate={true} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {explanation && (
+            <div style={{
+              marginTop: "22px", maxWidth: "500px", textAlign: "center",
+              padding: "16px 24px", background: "rgba(253,246,227,0.04)",
+              border: "1px solid rgba(184,134,78,0.2)", borderRadius: "3px",
+            }}>
+              <p style={{ color: "#c8a060", fontStyle: "italic", fontSize: "16px", margin: 0, lineHeight: 1.6 }}>
+                "{formatExplanation(explanation)}"
+              </p>
+            </div>
+          )}
+
+          {/* Legend */}
+          <div style={{ marginTop: "28px", display: "flex", gap: "24px", flexWrap: "wrap", justifyContent: "center" }}>
+            {[
+              { color: "#c8a882", pattern: true, label: "Shaded — uncertain / no information" },
+              { color: "#c0392b", circle: true, border: "#7b1a0e", label: "Red counter — some members definitely exist here" },
+              { color: "#8a8a8a", circle: true, border: "#4a4a4a", label: "Grey counter — no members definitely exist here" },
+            ].map(item => (
+              <div key={item.label} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {item.circle
+                  ? <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: item.color, border: `2px solid ${item.border}` }} />
+                  : <div style={{ width: "20px", height: "20px", background: item.color, backgroundImage: "repeating-linear-gradient(45deg, rgba(100,60,20,0.2) 0px, rgba(100,60,20,0.2) 1px, transparent 1px, transparent 6px)", border: "1px solid #2c1a0e" }} />
+                }
+                <span style={{ color: "#7a5830", fontSize: "13px" }}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* History */}
+          {history.length > 0 && (
+            <div style={{ marginTop: "32px", width: "100%", maxWidth: "620px" }}>
+              <div style={{ color: "#5a3815", fontSize: "11px", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "10px" }}>
+                Recent translations
+              </div>
+              {history.map((item, i) => (
+                <div key={i} style={{ padding: "10px 16px", borderLeft: "2px solid rgba(184,134,78,0.3)", marginBottom: "6px", opacity: 1 - i * 0.18 }}>
+                  <span style={{ color: "#a07840", fontStyle: "italic", fontSize: "15px" }}>"{item.text}"</span>
+                  <span style={{ color: "#5a3815", fontSize: "13px", marginLeft: "10px" }}>{item.termA} × {item.termB}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {(explanation || history.length > 0) && (
+            <button className="reset-btn" onClick={handleReset} style={{
+              marginTop: "24px", background: "transparent", border: "none",
+              color: "#5a3815", cursor: "pointer", fontSize: "14px",
+              fontFamily: "'Crimson Text', serif", letterSpacing: "1px",
+            }}>↺ Clear board</button>
+          )}
+
+          <p style={{ marginTop: "40px", color: "#3a2010", fontSize: "12px", fontStyle: "italic" }}>
+            Inspired by Lewis Carroll's <em>The Game of Logic</em>, 1886
+          </p>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
